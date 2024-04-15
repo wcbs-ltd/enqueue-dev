@@ -23,7 +23,7 @@ class RdKafkaProducer implements Producer
 
     public function __construct(VendorProducer $producer, Serializer $serializer)
     {
-        $this->producer = $producer;
+        $this->setProducer($producer);
 
         $this->setSerializer($serializer);
     }
@@ -37,11 +37,11 @@ class RdKafkaProducer implements Producer
         InvalidDestinationException::assertDestinationInstanceOf($destination, RdKafkaTopic::class);
         InvalidMessageException::assertMessageInstanceOf($message, RdKafkaMessage::class);
 
-        $partition = $message->getPartition() ?? $destination->getPartition() ?? RD_KAFKA_PARTITION_UA;
+        $partition = $message->getPartition() ?? $destination->getPartition() ?? \RD_KAFKA_PARTITION_UA;
         $payload = $this->serializer->toString($message);
         $key = $message->getKey() ?? $destination->getKey() ?? null;
 
-        $topic = $this->producer->newTopic($destination->getTopicName(), $destination->getConf());
+        $topic = $this->getProducer()->newTopic($destination->getTopicName(), $destination->getConf());
 
         // Note: Topic::producev method exists in phprdkafka > 3.1.0
         // Headers in payload are maintained for backwards compatibility with apps that might run on lower phprdkafka version
@@ -57,20 +57,20 @@ class RdKafkaProducer implements Producer
                 );
             } else {
                 $topic->producev($partition, 0 /* must be 0 */ , $payload, $key, $message->getHeaders());
-                $this->producer->poll(0);
+                $this->poll();
 
                 return;
             }
         }
 
         $topic->produce($partition, 0 /* must be 0 */ , $payload, $key);
-        $this->producer->poll(0);
+        $this->poll();
     }
 
     /**
      * @return RdKafkaProducer
      */
-    public function setDeliveryDelay(int $deliveryDelay = null): Producer
+    public function setDeliveryDelay(?int $deliveryDelay = null): Producer
     {
         if (null === $deliveryDelay) {
             return $this;
@@ -87,7 +87,7 @@ class RdKafkaProducer implements Producer
     /**
      * @return RdKafkaProducer
      */
-    public function setPriority(int $priority = null): Producer
+    public function setPriority(?int $priority = null): Producer
     {
         if (null === $priority) {
             return $this;
@@ -101,7 +101,7 @@ class RdKafkaProducer implements Producer
         return null;
     }
 
-    public function setTimeToLive(int $timeToLive = null): Producer
+    public function setTimeToLive(?int $timeToLive = null): Producer
     {
         if (null === $timeToLive) {
             return $this;
@@ -118,8 +118,23 @@ class RdKafkaProducer implements Producer
     public function flush(int $timeout): ?int
     {
         // Flush method is exposed in phprdkafka 4.0
-        if (method_exists($this->producer, 'flush')) {
-            return $this->producer->flush($timeout);
+        if (method_exists($this->getProducer(), 'flush')) {
+            return $this->getProducer()->flush($timeout);
         }
+    }
+
+    public function getProducer(): VendorProducer
+    {
+        return $this->producer;
+    }
+
+    public function setProducer(VendorProducer $producer): void
+    {
+        $this->producer = $producer;
+    }
+
+    public function poll(): void
+    {
+        $this->getProducer()->poll(0);
     }
 }

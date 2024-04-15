@@ -30,15 +30,9 @@ class RdKafkaConsumer implements Consumer
      */
     private $topic;
 
-    /**
-     * @var bool
-     */
-    private $subscribed;
+    private bool $subscribed = false;
 
-    /**
-     * @var bool
-     */
-    private $commitAsync;
+    private bool $commitAsync = true;
 
     /**
      * @var int|null
@@ -47,11 +41,9 @@ class RdKafkaConsumer implements Consumer
 
     public function __construct(KafkaConsumer $consumer, RdKafkaContext $context, RdKafkaTopic $topic, Serializer $serializer)
     {
-        $this->consumer = $consumer;
-        $this->context = $context;
-        $this->topic = $topic;
-        $this->subscribed = false;
-        $this->commitAsync = true;
+        $this->setConsumer($consumer);
+        $this->setContext($context);
+        $this->setTopic($topic);
 
         $this->setSerializer($serializer);
     }
@@ -71,9 +63,9 @@ class RdKafkaConsumer implements Consumer
         return $this->offset;
     }
 
-    public function setOffset(int $offset = null): void
+    public function setOffset(?int $offset = null): void
     {
-        if ($this->subscribed) {
+        if ($this->isSubscribed()) {
             throw new \LogicException('The consumer has already subscribed.');
         }
 
@@ -85,7 +77,7 @@ class RdKafkaConsumer implements Consumer
      */
     public function getQueue(): Queue
     {
-        return $this->topic;
+        return $this->getTopic();
     }
 
     /**
@@ -93,18 +85,18 @@ class RdKafkaConsumer implements Consumer
      */
     public function receive(int $timeout = 0): ?Message
     {
-        if (false === $this->subscribed) {
-            if (null === $this->offset) {
-                $this->consumer->subscribe([$this->getQueue()->getQueueName()]);
+        if (false === $this->isSubscribed()) {
+            if (null === $this->getOffset()) {
+                $this->getConsumer()->subscribe([$this->getQueue()->getQueueName()]);
             } else {
-                $this->consumer->assign([new TopicPartition(
+                $this->getConsumer()->assign([new TopicPartition(
                     $this->getQueue()->getQueueName(),
                     $this->getQueue()->getPartition(),
-                    $this->offset
+                    $this->getOffset()
                 )]);
             }
 
-            $this->subscribed = true;
+            $this->subscribed();
         }
 
         if ($timeout > 0) {
@@ -140,9 +132,9 @@ class RdKafkaConsumer implements Consumer
         }
 
         if ($this->isCommitAsync()) {
-            $this->consumer->commitAsync($message->getKafkaMessage());
+            $this->getConsumer()->commitAsync($message->getKafkaMessage());
         } else {
-            $this->consumer->commit($message->getKafkaMessage());
+            $this->getConsumer()->commit($message->getKafkaMessage());
         }
     }
 
@@ -154,24 +146,64 @@ class RdKafkaConsumer implements Consumer
         $this->acknowledge($message);
 
         if ($requeue) {
-            $this->context->createProducer()->send($this->topic, $message);
+            $this->getContext()->createProducer()->send($this->getTopic(), $message);
         }
+    }
+
+    protected function isSubscribed(): bool
+    {
+        return $this->subscribed;
+    }
+
+    protected function subscribed(): void
+    {
+        $this->subscribed = true;
+    }
+
+    protected function setConsumer(KafkaConsumer $consumer): void
+    {
+        $this->consumer = $consumer;
+    }
+
+    protected function getConsumer(): KafkaConsumer
+    {
+        return $this->consumer;
+    }
+
+    protected function getContext(): RdKafkaContext
+    {
+        return $this->context;
+    }
+
+    protected function setContext(RdKafkaContext $context): void
+    {
+        $this->context = $context;
+    }
+
+    protected function getTopic(): RdKafkaTopic
+    {
+        return $this->topic;
+    }
+
+    protected function setTopic(RdKafkaTopic $topic): void
+    {
+        $this->topic = $topic;
     }
 
     private function doReceive(int $timeout): ?RdKafkaMessage
     {
-        $kafkaMessage = $this->consumer->consume($timeout);
+        $kafkaMessage = $this->getConsumer()->consume($timeout);
 
         if (null === $kafkaMessage) {
             return null;
         }
 
         switch ($kafkaMessage->err) {
-            case RD_KAFKA_RESP_ERR__PARTITION_EOF:
-            case RD_KAFKA_RESP_ERR__TIMED_OUT:
-            case RD_KAFKA_RESP_ERR__TRANSPORT:
+            case \RD_KAFKA_RESP_ERR__PARTITION_EOF:
+            case \RD_KAFKA_RESP_ERR__TIMED_OUT:
+            case \RD_KAFKA_RESP_ERR__TRANSPORT:
                 return null;
-            case RD_KAFKA_RESP_ERR_NO_ERROR:
+            case \RD_KAFKA_RESP_ERR_NO_ERROR:
                 $message = $this->serializer->toMessage($kafkaMessage->payload);
                 $message->setKey($kafkaMessage->key);
                 $message->setPartition($kafkaMessage->partition);

@@ -43,16 +43,7 @@ class RdKafkaConnectionFactory implements ConnectionFactory
             throw new \RuntimeException('You must install librdkafka:1.0.0 or higher');
         }
 
-        if (empty($config) || 'kafka:' === $config) {
-            $config = [];
-        } elseif (is_string($config)) {
-            $config = $this->parseDsn($config);
-        } elseif (is_array($config)) {
-        } else {
-            throw new \LogicException('The config must be either an array of options, a DSN string or null');
-        }
-
-        $this->config = array_replace_recursive($this->defaultConfig(), $config);
+        $this->setConfig($config);
     }
 
     /**
@@ -60,10 +51,10 @@ class RdKafkaConnectionFactory implements ConnectionFactory
      */
     public function createContext(): Context
     {
-        return new RdKafkaContext($this->config);
+        return new RdKafkaContext($this->getConfig());
     }
 
-    private function parseDsn(string $dsn): array
+    protected function parseDsn(string $dsn): array
     {
         $dsnConfig = parse_url($dsn);
         if (false === $dsnConfig) {
@@ -99,7 +90,7 @@ class RdKafkaConnectionFactory implements ConnectionFactory
         return array_replace_recursive($this->defaultConfig(), $config);
     }
 
-    private function defaultConfig(): array
+    protected function defaultConfig(): array
     {
         return [
             'global' => [
@@ -107,5 +98,24 @@ class RdKafkaConnectionFactory implements ConnectionFactory
                 'metadata.broker.list' => 'localhost:9092',
             ],
         ];
+    }
+
+    protected function setConfig($config): void
+    {
+        if (empty($config) || 'kafka:' === $config) {
+            $config = [];
+        } elseif (is_string($config)) {
+            $config = $this->parseDsn($config);
+        } elseif (is_array($config)) {
+        } else {
+            throw new \LogicException('The config must be either an array of options, a DSN string or null');
+        }
+
+        $this->config = array_replace_recursive($this->defaultConfig(), $config);
+    }
+
+    protected function getConfig(): array
+    {
+        return $this->config;
     }
 }

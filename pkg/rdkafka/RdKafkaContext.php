@@ -42,18 +42,16 @@ class RdKafkaContext implements Context
     /**
      * @var KafkaConsumer[]
      */
-    private $kafkaConsumers;
+    private $kafkaConsumers = [];
 
     /**
      * @var RdKafkaConsumer[]
      */
-    private $rdKafkaConsumers;
+    private $rdKafkaConsumers = [];
 
     public function __construct(array $config)
     {
-        $this->config = $config;
-        $this->kafkaConsumers = [];
-        $this->rdKafkaConsumers = [];
+        $this->setConfig($config);
 
         $this->setSerializer(new JsonSerializer());
     }
@@ -95,8 +93,8 @@ class RdKafkaContext implements Context
         if (!isset($this->producer)) {
             $producer = new VendorProducer($this->getConf());
 
-            if (isset($this->config['log_level'])) {
-                $producer->setLogLevel($this->config['log_level']);
+            if (isset($this->getConfig()['log_level'])) {
+                $producer->setLogLevel($this->getConfig()['log_level']);
             }
 
             $this->producer = new RdKafkaProducer($producer, $this->getSerializer());
@@ -105,7 +103,7 @@ class RdKafkaContext implements Context
             // down. Otherwise, we are bound to lose messages in transit.
             // Note that it is generally preferable to call "close" method explicitly before shutdown starts, since
             // otherwise we might not have access to some objects, like database connections.
-            register_shutdown_function([$this->producer, 'flush'], $this->config['shutdown_timeout'] ?? -1);
+            register_shutdown_function([$this->producer, 'flush'], $this->getConfig()['shutdown_timeout'] ?? -1);
         }
 
         return $this->producer;
@@ -122,8 +120,10 @@ class RdKafkaContext implements Context
 
         $queueName = $destination->getQueueName();
 
-        if (!isset($this->rdKafkaConsumers[$queueName])) {
-            $this->kafkaConsumers[] = $kafkaConsumer = new KafkaConsumer($this->getConf());
+        if (!$this->rdKafkaConsumerExists($queueName)) {
+            $kafkaConsumer = new KafkaConsumer($this->getConf());
+
+            $this->appendKafkaConsumer($kafkaConsumer);
 
             $consumer = new RdKafkaConsumer(
                 $kafkaConsumer,
@@ -132,14 +132,14 @@ class RdKafkaContext implements Context
                 $this->getSerializer()
             );
 
-            if (isset($this->config['commit_async'])) {
-                $consumer->setCommitAsync($this->config['commit_async']);
+            if (isset($this->getConfig()['commit_async'])) {
+                $consumer->setCommitAsync($this->getConfig()['commit_async']);
             }
 
-            $this->rdKafkaConsumers[$queueName] = $consumer;
+            $this->appendRdKafkaConsumer($consumer, $queueName);
         }
 
-        return $this->rdKafkaConsumers[$queueName];
+        return $this->getRdKafkaConsumer($queueName);
     }
 
     public function close(): void
@@ -154,7 +154,7 @@ class RdKafkaContext implements Context
 
         // Compatibility with phprdkafka 4.0.
         if (isset($this->producer)) {
-            $this->producer->flush($this->config['shutdown_timeout'] ?? -1);
+            $this->producer->flush($this->getConfig()['shutdown_timeout'] ?? -1);
         }
     }
 
@@ -173,51 +173,81 @@ class RdKafkaContext implements Context
         if (!defined('RD_KAFKA_VERSION')) {
             throw new \RuntimeException('RD_KAFKA_VERSION constant is not defined. Phprdkafka is probably not installed');
         }
-        $major = (RD_KAFKA_VERSION & 0xFF000000) >> 24;
-        $minor = (RD_KAFKA_VERSION & 0x00FF0000) >> 16;
-        $patch = (RD_KAFKA_VERSION & 0x0000FF00) >> 8;
+        $major = (\RD_KAFKA_VERSION & 0xFF000000) >> 24;
+        $minor = (\RD_KAFKA_VERSION & 0x00FF0000) >> 16;
+        $patch = (\RD_KAFKA_VERSION & 0x0000FF00) >> 8;
 
         return "$major.$minor.$patch";
     }
 
-    private function getConf(): Conf
+    public function setConfig(array $config): void
+    {
+        $this->config = $config;
+    }
+
+    public function rdKafkaConsumerExists(string $queueName): bool
+    {
+        return isset($this->rdKafkaConsumers[$queueName]);
+    }
+
+    public function appendKafkaConsumer(KafkaConsumer $kafkaConsumer): void
+    {
+        $this->kafkaConsumers[] = $kafkaConsumer;
+    }
+
+    public function appendRdKafkaConsumer(RdKafkaConsumer $consumer, string $queueName): void
+    {
+        $this->rdKafkaConsumers[$queueName] = $consumer;
+    }
+
+    public function getRdKafkaConsumer(string $queueName)
+    {
+        return $this->rdKafkaConsumers[$queueName];
+    }
+
+    protected function getConf(): Conf
     {
         if (null === $this->conf) {
             $this->conf = new Conf();
 
-            if (isset($this->config['topic']) && is_array($this->config['topic'])) {
-                foreach ($this->config['topic'] as $key => $value) {
+            if (isset($this->getConfig()['topic']) && is_array($this->getConfig()['topic'])) {
+                foreach ($this->getConfig()['topic'] as $key => $value) {
                     $this->conf->set($key, $value);
                 }
             }
 
-            if (isset($this->config['partitioner'])) {
-                $this->conf->set('partitioner', $this->config['partitioner']);
+            if (isset($this->getConfig()['partitioner'])) {
+                $this->conf->set('partitioner', $this->getConfig()['partitioner']);
             }
 
-            if (isset($this->config['global']) && is_array($this->config['global'])) {
-                foreach ($this->config['global'] as $key => $value) {
+            if (isset($this->getConfig()['global']) && is_array($this->getConfig()['global'])) {
+                foreach ($this->getConfig()['global'] as $key => $value) {
                     $this->conf->set($key, $value);
                 }
             }
 
-            if (isset($this->config['dr_msg_cb'])) {
-                $this->conf->setDrMsgCb($this->config['dr_msg_cb']);
+            if (isset($this->getConfig()['dr_msg_cb'])) {
+                $this->conf->setDrMsgCb($this->getConfig()['dr_msg_cb']);
             }
 
-            if (isset($this->config['error_cb'])) {
-                $this->conf->setErrorCb($this->config['error_cb']);
+            if (isset($this->getConfig()['error_cb'])) {
+                $this->conf->setErrorCb($this->getConfig()['error_cb']);
             }
 
-            if (isset($this->config['rebalance_cb'])) {
-                $this->conf->setRebalanceCb($this->config['rebalance_cb']);
+            if (isset($this->getConfig()['rebalance_cb'])) {
+                $this->conf->setRebalanceCb($this->getConfig()['rebalance_cb']);
             }
 
-            if (isset($this->config['stats_cb'])) {
-                $this->conf->setStatsCb($this->config['stats_cb']);
+            if (isset($this->getConfig()['stats_cb'])) {
+                $this->conf->setStatsCb($this->getConfig()['stats_cb']);
             }
         }
 
         return $this->conf;
+    }
+
+    protected function getConfig(): array
+    {
+        return $this->config;
     }
 }
